@@ -89,8 +89,10 @@ def main():
     bounty = w3.to_wei(a.bounty, "ether")
     price = expected_gas_price(w3)
     max_gas_price = w3.to_wei(a.max_gas_price, "gwei") if a.max_gas_price is not None else 2 * price
-    # Per voter: one relayed registration (~200k gas) + one relayed vote (~400k), each with a bounty.
-    estimate = len(whitelist) * (600_000 * price + 2 * bounty)
+    # Per voter: one relayed registration and one relayed vote, each with a bounty. A
+    # registration costs ~260k gas plus ~32k per level of the voters' Merkle tree; a vote ~450k.
+    levels = max(1, (len(whitelist) - 1).bit_length())
+    estimate = len(whitelist) * ((260_000 + 32_000 * levels + 450_000) * price + 2 * bounty)
     funding = w3.to_wei(a.fund, "ether") if a.fund is not None else estimate
     rcpt = deploy(
         w3, acct, artifact(name), sem, a.title, a.candidates, whitelist, reg_end, vote_start, vote_end, min_anon,

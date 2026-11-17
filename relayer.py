@@ -5,6 +5,7 @@ Transport (see nostr.py): voters publish a kind-9467 event tagged
 ["t", "goblett-<chainId>"] to public Nostr relays. Its content is JSON:
 
     {"type": "register", "election", "wallet", "identityCommitment", "signature"}   -> registerFor
+    {"type": "register", ..., "signingChainId"}                                     -> registerForSignedOn
     {"type": "vote", "election", "proof": {...}, "ranking": [..]?}                   -> vote
 
 The relayer serves ANY genuine goblett election on its chain, so elections created from
@@ -214,8 +215,16 @@ def handle_register(body: dict) -> dict:
         raise BadRequest("need wallet (address) and signature (hex)")
     commitment = uint(body.get("identityCommitment"), "identityCommitment")
     election, _ = lookup_election(body.get("election"))
-    fn = election.functions.registerFor(wallet, commitment, sig)
-    return submit(election, fn, f"registerFor {wallet}", max_refund_gas=300_000)
+    # A wallet that signed while on another network (Ethereum, an L2, ...) says which one:
+    # the contract then checks the RegisterOn signature instead of Register.
+    if body.get("signingChainId") is None:
+        fn = election.functions.registerFor(wallet, commitment, sig)
+        label = f"registerFor {wallet}"
+    else:
+        signing_chain = uint(body["signingChainId"], "signingChainId")
+        fn = election.functions.registerForSignedOn(wallet, commitment, signing_chain, sig)
+        label = f"registerForSignedOn {wallet} (signed on chain {signing_chain})"
+    return submit(election, fn, label)
 
 
 def handle_vote(body: dict) -> dict:
@@ -242,27 +251,38 @@ def handle_vote(body: dict) -> dict:
     return submit(election, fn, f"vote nullifier {hex(proof[2])[:14]}...")
 
 
-def reimbursement_check(election, max_refund_gas=1_000_000):
+def reimbursement_check(election):
     """A precheck for send(): raise unless the election will pay back this relay.
-    Mirrors Election._creditRelayer: min(funds, min(gas + overhead, max_refund_gas) * min(price, cap) + bounty);
-    max_refund_gas is MAX_REGISTER_REFUND_GAS (300k) for registerFor, MAX_REFUND_GAS (1M) for votes."""
+
+    Election._creditRelayer refunds the gas the transaction really costs (measured gas
+    plus the 21000 base, calldata and the credit's own storage writes; within ~2%), up to
+    MAX_REFUND_GAS, at min(gas price, the election's cap), plus the bounty, limited to the
+    funding that is left. So a relay pays for itself when the funding covers it and the
+    cap is not below the price we pay (the bounty can make up a small shortfall).
+    Not visible from here: a contract wallet whose signature check costs more than the
+    contract's 100k allowance is refunded less than this estimate."""
     f = election.functions
     bounty, cap, funds = f.relayBounty().call(), f.maxRefundGasPrice().call(), f.relayFunds().call()
 
     def check(gas: int, gas_price: int):
         cost = gas * gas_price
-        credit = min(funds, min(gas + 40_000, max_refund_gas) * min(gas_price, cap) + bounty)
+        credit = min(funds, min(gas, 1_000_000) * min(gas_price, cap) + bounty)
         if credit < cost:
-            why = "it has no relayer funding left" if funds < cost else f"its gas price cap ({cap / 1e9:g} gwei) is below the current price"
+            if funds < cost:
+                why = "it has no relayer funding left"
+            elif cap < gas_price:
+                why = f"its gas price cap ({cap / 1e9:g} gwei) is below the current price"
+            else:
+                why = f"it needs {gas} gas, more than the contract refunds"
             raise BadRequest(f"this relayer would not be reimbursed: {why}")
 
     return check
 
 
-def submit(election, fn, label: str, max_refund_gas: int = 1_000_000) -> dict:
+def submit(election, fn, label: str) -> dict:
     with tx_lock:
         try:
-            precheck = reimbursement_check(election, max_refund_gas) if REQUIRE_REIMBURSEMENT else None
+            precheck = reimbursement_check(election) if REQUIRE_REIMBURSEMENT else None
             rcpt = send(w3, relayer, fn, gas_cap=MAX_GAS, precheck=precheck)
         except BadRequest:
             raise

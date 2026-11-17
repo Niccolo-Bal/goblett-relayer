@@ -11,6 +11,7 @@ the relayer directly, and anyone can run another relayer on the same topic.
 | Relays | `nostrRelays` in `election.json` (default `wss://nos.lol`, `wss://relay.primal.net`; set with `setup_chain.py --nostr-relays`) |
 | Topic | tag `["t", "goblett-<chainId>"]`, one per chain |
 | Request, kind 9467 | content `{"type":"register", election, wallet, identityCommitment, signature}` or `{"type":"vote", election, proof, ranking?}` |
+| Signed on another network | a `register` request may carry `signingChainId` (the network the wallet was on when it signed). The relayer then calls `registerForSignedOn`, which checks the `RegisterOn` signature. |
 | Reply, kind 9468 | tag `["e", <request id>]`, content `{ok, txHash?, error?}` |
 
 The relayer serves **any genuine goblett election** on its chain, so an election created
@@ -73,9 +74,17 @@ if a deployment hangs, use MetaMask's "Clear activity tab data" for the account.
 ## Relayer payment
 
 Each election holds funding sent by its creator (with the deployment, or later by anyone).
-Every relayed registration (`registerFor`) and every counted vote credits the relayer
-inside the contract: its gas, at up to the election's `maxRefundGasPrice`, plus
-`relayBounty`. Nothing is transferred during the relay itself.
+Every relayed registration and every counted vote credits the relayer inside the
+contract: the gas the transaction cost (measured to within about 2%), at up to the
+election's `maxRefundGasPrice`, plus `relayBounty`. Nothing is transferred during the
+relay itself, so each relay nets the relayer the bounty.
+
+**A withdrawal costs more than two bounties.** It is its own transaction (~50k gas,
+about 0.00125 USDC at 25 gwei) and nobody refunds it. One withdrawal per election, after
+it ends, is the cheapest way to collect, and that is what the relayer does. An election
+where this relayer earned fewer than three bounties costs more to collect from than it
+paid in bounties. When collecting by hand, `withdraw.py` leaves amounts below 20 times
+the withdrawal's cost in place (`--min <amount>` or `--force` override that).
 
 The relayer collects by itself: it remembers each election that credited it (in
 `owed.json` / `owed.<network>.json`, gitignored) and, once that election's voting has
