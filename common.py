@@ -1,6 +1,7 @@
 """Shared helpers for the relayer and the deploy/advance scripts.
 
-Contract ABIs/bytecode come from the Foundry build in ../dapp/out (run `forge build`).
+Contract ABIs/bytecode come from contracts/<Name>.json in this repo: copies of the Foundry
+build output (dapp/out/<Name>.sol/<Name>.json in the goblett repo, after `forge build`).
 """
 
 import json
@@ -11,7 +12,8 @@ from web3 import Web3
 from web3.exceptions import ContractCustomError, ContractLogicError
 
 HERE = Path(__file__).resolve().parent
-DAPP = HERE.parent / "dapp"
+# Foundry artifacts, copied from the goblett repo. Set GOBLETT_ARTIFACTS to use another folder.
+ARTIFACTS = Path(os.environ.get("GOBLETT_ARTIFACTS") or HERE / "contracts")
 # Which deployment this process works on. Unset = the main network (election.json, .env).
 # GOBLETT_NETWORK=testnet uses election.testnet.json and .env.testnet instead, so a
 # second relayer can serve the site's /testnet page alongside the main one.
@@ -132,9 +134,12 @@ KINDS = {"fptp": "FPTPElection", "ranked": "RankedChoiceElection"}
 
 
 def artifact(name: str) -> dict:
-    path = DAPP / "out" / f"{name}.sol" / f"{name}.json"
+    path = ARTIFACTS / f"{name}.json"
     if not path.exists():
-        raise SystemExit(f"missing {path}; run `forge build` in dapp/")
+        raise SystemExit(
+            f"missing {path}; copy dapp/out/{name}.sol/{name}.json from the goblett repo\n"
+            f"(after `forge build` there) into {ARTIFACTS}"
+        )
     return json.loads(path.read_text())
 
 

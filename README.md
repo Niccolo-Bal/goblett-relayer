@@ -49,7 +49,14 @@ voter wallets, registration end, voting end, relayer bounty and funding) and con
 deployment in MetaMask. The site then opens it at `?election=<address>`; share that link
 with voters. `deploy_election.py` does the same from the command line.
 
-After changing the contracts: `forge build`, then `setup_chain.py` again (it re-exports
+The scripts read the compiled contracts from `contracts/<Name>.json` in this repo:
+`FPTPElection`, `RankedChoiceElection`, `Election`, `Semaphore`, `SemaphoreVerifier` and
+`PoseidonT3`, each copied from `dapp/out/<Name>.sol/<Name>.json` of the goblett repo's
+Foundry build. They must be the build the deployed elections came from, because the
+relayer compares on-chain code against them. `GOBLETT_ARTIFACTS=<folder>` reads them from
+somewhere else.
+
+After changing the contracts: `forge build`, copy the new artifacts into `contracts/`, then `setup_chain.py` again (it re-exports
 `site/contracts.json`), then restart the relayer. Elections deployed from an older build
 are refused by the relayer.
 
