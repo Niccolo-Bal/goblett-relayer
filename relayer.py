@@ -30,14 +30,71 @@ Privacy: the relayer never sees a voter's IP; the Nostr relays do instead (plus
 timing). Use Tor/VPN for real elections.
 
 Env (or relayer/.env): RPC_URL, RELAYER_KEY, REQUIRE_REIMBURSEMENT.
+
+    python relayer.py                    one network, chosen by GOBLETT_NETWORK (see common.py)
+    python relayer.py mainnet testnet    both, one child process each, with the same wallet:
+                                         RELAYER_KEY from relayer/relayer.env
 """
 
 import asyncio
 import collections
 import json
 import os
+import signal
+import subprocess
+import sys
 import threading
 import time
+
+
+def supervise(networks: list) -> int:
+    """Run one relayer process per network and prefix their output with the network name.
+    Separate processes keep each chain's connection, config and nonces apart; the wallet is
+    the same because every network reads RELAYER_KEY from relayer.env. If one stops, all stop."""
+    networks = list(dict.fromkeys(n.strip().lower() for n in networks))
+    if not all(n.isalnum() for n in networks):
+        raise SystemExit("usage: python relayer.py [network ...]   e.g. python relayer.py mainnet testnet")
+
+    def pump(name, out):
+        for line in out:
+            print(f"[{name}] {line}", end="", flush=True)
+
+    def stop(*_):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)  # e.g. systemd stop: take the children down too
+    children = {}
+    code = 0
+    try:
+        for n in networks:
+            p = subprocess.Popen(
+                [sys.executable, "-u", os.path.abspath(__file__)],
+                env={**os.environ, "GOBLETT_NETWORK": n},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            children[n] = p
+            threading.Thread(target=pump, args=(n, p.stdout), daemon=True).start()
+        while all(p.poll() is None for p in children.values()):
+            time.sleep(1)
+        time.sleep(0.5)  # let the last lines through
+        dead = [n for n, p in children.items() if p.poll() is not None]
+        print(f"relayer for {', '.join(dead)} stopped; stopping the rest")
+        code = 1
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for p in children.values():
+            if p.poll() is None:
+                p.terminate()
+        for p in children.values():
+            p.wait()
+    return code
+
+
+if __name__ == "__main__" and len(sys.argv) > 1:
+    raise SystemExit(supervise(sys.argv[1:]))
 
 from web3 import Web3
 from web3.logs import DISCARD

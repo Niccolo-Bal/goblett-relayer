@@ -15,33 +15,50 @@ DAPP = HERE.parent / "dapp"
 # Which deployment this process works on. Unset = the main network (election.json, .env).
 # GOBLETT_NETWORK=testnet uses election.testnet.json and .env.testnet instead, so a
 # second relayer can serve the site's /testnet page alongside the main one.
-NETWORK = os.environ.get("GOBLETT_NETWORK", "").strip().lower()
-if NETWORK and not NETWORK.isalnum():
+# GOBLETT_NETWORK=mainnet is the main network too, but defaults to Arc's RPC, not anvil.
+_NAMED = os.environ.get("GOBLETT_NETWORK", "").strip().lower()
+if _NAMED and not _NAMED.isalnum():
     raise SystemExit("GOBLETT_NETWORK must be a simple name such as 'testnet'")
+NETWORK = "" if _NAMED in ("main", "mainnet") else _NAMED
 _SUFFIX = f".{NETWORK}" if NETWORK else ""
 CONFIG_PATH = HERE / f"election{_SUFFIX}.json"
 SITE_CONFIG_PATH = HERE.parent / "site" / "public" / f"election{_SUFFIX}.json"
+# relayer.env holds what every network shares: one RELAYER_KEY, so the same wallet relays
+# on mainnet and testnet. A named network takes only these variables from it.
+SHARED_ENV = HERE / "relayer.env"
+SHARED_VARS = {"RELAYER_KEY"}
+_DEFAULT_RPC = {"mainnet": "https://rpc.mainnet.arc.io", "main": "https://rpc.mainnet.arc.io", "testnet": "https://rpc.testnet.arc.io"}
 
+
+def _read_env(path: Path, only=None):
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if v and (only is None or k in only):
+                os.environ.setdefault(k, v)
 
 
 def _load_dotenv():
-    """Read KEY=VALUE lines from relayer/.env (gitignored) into the environment.
-    Real environment variables win. Keeps private keys out of the repo and the shell history."""
-    # relayer.env is the old name; both are gitignored now (R3-1: it was committed with a live key).
-    # A named network reads ONLY its own file, never the main network's keys or RPC.
-    for path in ((HERE / f".env{_SUFFIX}",) if NETWORK else (HERE / ".env", HERE / "relayer.env")):
-        if not path.exists():
-            continue
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    """Read KEY=VALUE lines from the gitignored env files into the environment.
+    Real environment variables win, then the network's own file, then relayer.env.
+    Keeps private keys out of the repo and the shell history."""
+    if NETWORK:
+        # A named network never reads the main network's .env (its RPC or deployer key);
+        # from relayer.env it takes the shared relayer key and nothing else.
+        _read_env(HERE / f".env{_SUFFIX}")
+        _read_env(SHARED_ENV, only=SHARED_VARS)
+    else:
+        _read_env(HERE / ".env")
+        _read_env(SHARED_ENV)
 
 
 _load_dotenv()
 
-RPC_URL = os.environ.get("RPC_URL", "http://127.0.0.1:8545")
+RPC_URL = os.environ.get("RPC_URL") or _DEFAULT_RPC.get(_NAMED, "http://127.0.0.1:8545")
 LOCAL_CHAIN_ID = 31337  # anvil
 # Anvil dev keys: PUBLIC, for the local chain only (#1 is skipped: Arc blocklists it).
 _ANVIL_KEYS = {
@@ -77,9 +94,12 @@ def account(w3: Web3, name: str):
     key = os.environ.get(name)
     if not key:
         if w3.eth.chain_id != LOCAL_CHAIN_ID and os.environ.get("ALLOW_DEV_KEYS") != "1":
+            where = f"relayer/.env{_SUFFIX}"
+            if name in SHARED_VARS:
+                where = f"relayer/relayer.env (shared by all networks) or {where}"
             raise SystemExit(
                 f"{name} is not set. On chain {w3.eth.chain_id} you must use your own funded key: put\n"
-                f"  {name}=0x...\nin relayer/.env{_SUFFIX} (gitignored). The built-in anvil keys are public.\n"
+                f"  {name}=0x...\nin {where} (gitignored). The built-in anvil keys are public.\n"
                 f"(For a local fork of a real chain, set ALLOW_DEV_KEYS=1.)"
             )
         key = _ANVIL_KEYS[name]

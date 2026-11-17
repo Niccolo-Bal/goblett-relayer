@@ -106,17 +106,40 @@ The same site build serves both networks: `/` reads `election.json` (mainnet) an
 and the Nostr topic both include the chain ID, so the two never mix.
 
 The testnet side needs its own relayer process. Scripts run with `GOBLETT_NETWORK=testnet`
-use `relayer/election.testnet.json` and read keys and RPC only from `relayer/.env.testnet`
-(never from `.env`):
-
-```bash
-# relayer/.env.testnet: RPC_URL=https://rpc.testnet.arc.io, RELAYER_KEY=0x... (testnet funds)
-set GOBLETT_NETWORK=testnet
-.venv\Scripts\python relayer.py
-```
+use `relayer/election.testnet.json` and read their RPC and deployer key only from
+`relayer/.env.testnet` (never from `.env`). The RPC defaults to `https://rpc.testnet.arc.io`.
 
 `GOBLETT_NETWORK=testnet` works the same way for `setup_chain.py`, `deploy_election.py`
 and `withdraw.py`.
+
+### One relayer wallet for both networks
+
+`relayer/relayer.env` (gitignored) holds what the networks share: a single line
+
+```
+RELAYER_KEY=0x...
+```
+
+Every network reads the relayer key from there, so the same wallet relays on mainnet and
+testnet. Fund that address on both chains, then start both relayers with one command:
+
+```bash
+.venv\Scripts\python relayer.py mainnet testnet
+```
+
+This runs one child process per network (output prefixed `[mainnet]` / `[testnet]`), each
+with its own `election*.json`, RPC connection and nonces; transactions are signed with
+the chain ID, so one chain's can't be replayed on the other. `mainnet` defaults to
+`https://rpc.mainnet.arc.io` and `testnet` to `https://rpc.testnet.arc.io` unless
+`RPC_URL` is set in `.env` / `.env.testnet`. If one relayer stops, the other is stopped
+too and the command exits, so run it under something that restarts it. Don't set
+`RPC_URL` in the shell here: a real environment variable would apply to both networks.
+
+A `RELAYER_KEY` in `.env` or `.env.testnet` overrides the shared one for that network.
+`withdraw.py` uses the same key: `GOBLETT_NETWORK=testnet` for testnet elections,
+`GOBLETT_NETWORK=mainnet` (or `RPC_URL` in `.env`) for mainnet ones.
+
+The wallet holds real USDC on mainnet, and testnet traffic is now signed by that same key.
 
 ## Deploying on Arc testnet
 
