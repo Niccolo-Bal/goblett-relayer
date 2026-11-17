@@ -14,6 +14,7 @@ class FakeEth:
 c.w3 = None
 for n in ["CONFIG_PATH","KINDS","RPC_URL","account","artifact","load_config","revert_reason","send"]: setattr(c, n, None)
 c.LOCAL_CHAIN_ID = 31337; c.KINDS = {}
+import pathlib, tempfile; c.CONFIG_PATH = pathlib.Path(tempfile.mkdtemp()) / "election.json"
 c.connect = lambda *a, **k: types.SimpleNamespace(eth=FakeEth())
 c.account = lambda *a, **k: types.SimpleNamespace(address="0x0")
 sys.modules["common"] = c

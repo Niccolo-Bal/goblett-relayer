@@ -9,3 +9,6 @@ relayer.env
 .env.*
 !.env.example
 election.*.json
+# elections that still owe this relayer (auto-withdraw state)
+owed.json
+owed.*.json

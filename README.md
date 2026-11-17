@@ -77,6 +77,12 @@ Every relayed registration (`registerFor`) and every counted vote credits the re
 inside the contract: its gas, at up to the election's `maxRefundGasPrice`, plus
 `relayBounty`. Nothing is transferred during the relay itself.
 
+The relayer collects by itself: it remembers each election that credited it (in
+`owed.json` / `owed.<network>.json`, gitignored) and, once that election's voting has
+ended, calls `withdraw()` if what is owed exceeds the withdrawal's gas. It checks every
+10 minutes (`WITHDRAW_INTERVAL`, seconds); `AUTO_WITHDRAW=0` turns it off. To collect by
+hand at any time:
+
 ```bash
 .venv\Scripts\python withdraw.py 0xELECTION [0xELECTION ...]   # collect what is owed
 ```

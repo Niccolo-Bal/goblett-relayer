@@ -23,8 +23,10 @@ run another relayer on the same topic; whoever submits first wins and the rest s
 AlreadyRegistered / NullifierAlreadyUsed in simulation (no gas spent).
 
 Payment: each relay credits this relayer inside the election contract (gas refund +
-bounty), funded by the election's creator. Collect it with withdraw.py. By default (off
-the local chain) relays the election would not pay back are refused.
+bounty), funded by the election's creator. Once an election's voting has ended the
+relayer withdraws what it is owed there, if that is more than the withdrawal's gas
+(AUTO_WITHDRAW=0 turns this off; withdraw.py collects by hand at any time). By default
+(off the local chain) relays the election would not pay back are refused.
 
 Privacy: the relayer never sees a voter's IP; the Nostr relays do instead (plus
 timing). Use Tor/VPN for real elections.
@@ -122,6 +124,32 @@ REJECT_TTL = 600
 # (comma list; the configured default election is always included) get more turns.
 PRIORITY_WEIGHT = int(os.environ.get("PRIORITY_WEIGHT", "4"))
 MAX_PENDING_PER_ELECTION = int(os.environ.get("MAX_PENDING_PER_ELECTION", "200"))
+# Elections that credited this relayer and have not been withdrawn from yet. Kept in
+# owed.json / owed.<network>.json next to the config (gitignored), so a restart forgets nothing.
+AUTO_WITHDRAW = os.environ.get("AUTO_WITHDRAW", "1") == "1"
+WITHDRAW_INTERVAL = int(os.environ.get("WITHDRAW_INTERVAL", "600"))  # seconds between checks
+unpaid = set()
+_not_worth = set()  # logged once per run: owed less than the withdrawal would cost
+
+
+def _unpaid_path():
+    return CONFIG_PATH.with_name("owed" + CONFIG_PATH.name.removeprefix("election"))
+
+
+def load_unpaid():
+    try:
+        unpaid.update(Web3.to_checksum_address(a) for a in json.loads(_unpaid_path().read_text()))
+    except (OSError, ValueError, TypeError):
+        pass  # no file yet, or unreadable: start empty
+
+
+def save_unpaid():
+    try:
+        tmp = _unpaid_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted(unpaid), indent=2))
+        tmp.replace(_unpaid_path())
+    except OSError as e:
+        print(f"  could not save {_unpaid_path().name}: {e}")
 
 
 def _masked_runtime(code: bytes, art: dict) -> bytes:
@@ -249,7 +277,47 @@ def submit(election, fn, label: str, max_refund_gas: int = 1_000_000) -> dict:
         f"  {'sent' if ok else 'FAILED'} {label}: tx {rcpt.transactionHash.to_0x_hex()} gas {rcpt.gasUsed},"
         f" paid {cost / 1e18:.6f}, credited {credited / 1e18:.6f}"
     )
+    if credited and election.address not in unpaid:
+        unpaid.add(election.address)
+        save_unpaid()
     return {"ok": ok, "txHash": rcpt.transactionHash.to_0x_hex(), "gasUsed": rcpt.gasUsed}
+
+
+def withdraw_finished():
+    """Blocking: for each election that owes this relayer and whose voting has ended (no
+    more credits can come), withdraw, unless the gas would cost more than what is owed."""
+    now = w3.eth.get_block("latest").timestamp
+    for addr in sorted(unpaid):
+        try:
+            election, _ = lookup_election(addr)
+        except BadRequest:  # not one of ours (e.g. the chain was reset)
+            unpaid.discard(addr)
+            save_unpaid()
+            continue
+        try:
+            if now < election.functions.votingEnd().call():
+                continue
+            owed = election.functions.owed(relayer.address).call()
+            if owed:
+
+                def worth_it(gas: int, gas_price: int):
+                    if gas * gas_price >= owed:
+                        raise BadRequest(f"owed {owed / 1e18:.6f} is less than the gas to withdraw it")
+
+                with tx_lock:
+                    rcpt = send(w3, relayer, election.functions.withdraw(), gas_cap=MAX_GAS, precheck=worth_it)
+                if rcpt.status != 1:
+                    print(f"  withdraw from {addr} FAILED: tx {rcpt.transactionHash.to_0x_hex()}")
+                    continue
+                print(f"  withdrew {owed / 1e18:.6f} from {addr}: tx {rcpt.transactionHash.to_0x_hex()}")
+            unpaid.discard(addr)
+            save_unpaid()
+        except BadRequest as e:  # retried at every check: the gas price may come down
+            if addr not in _not_worth:
+                _not_worth.add(addr)
+                print(f"  not withdrawing from {addr} yet: {e}")
+        except Exception as e:  # revert (e.g. blocklisted wallet) or RPC failure; try again later
+            print(f"  withdraw from {addr} failed: {revert_reason(e)}")
 
 
 HANDLERS = {"register": handle_register, "vote": handle_vote}
@@ -322,7 +390,18 @@ async def serve(config: dict):
         reply = nostr.make_event(key, nostr.KIND_REPLY, [["t", topic], ["e", event["id"]]], json.dumps(result))
         await pool.publish(reply)
 
+    async def withdrawals():
+        while True:
+            try:
+                await asyncio.to_thread(withdraw_finished)
+            except Exception as e:
+                print(f"  withdrawal check failed: {e!r}")
+            await asyncio.sleep(WITHDRAW_INTERVAL)
+
     tasks.append(asyncio.create_task(intake()))
+    if AUTO_WITHDRAW:
+        load_unpaid()
+        tasks.append(asyncio.create_task(withdrawals()))
     try:
         while True:
             await ready.wait()
