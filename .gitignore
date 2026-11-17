@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+# per-deployment, local chain
+election.json
+relayer.log
+# private keys
+.env
+relayer.env
+.env.*
+!.env.example
+election.*.json
