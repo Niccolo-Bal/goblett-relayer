@@ -1,7 +1,7 @@
 
 # Goblett relayer
  
-Voters sign registrations and votes in the browser and publish them to Nostr. The relayer picks them up and submits them to the chain, paying the gas. Anyone can run their own relayer on the same topic.
+Voters sign registrations and votes in the browser and publish them to Nostr. The relayer picks them up and submits them to the chain, paying the gas.
  
 - Topic: `["t", "goblett-<chainId>"]`
 - Request (kind 9467): `{"type":"register", election, wallet, identityCommitment, signature}` or `{"type":"vote", election, proof, ranking?}`
@@ -67,7 +67,7 @@ Testnet scripts use `GOBLETT_NETWORK=testnet`, which reads `relayer/election.tes
 .venv\Scripts\python relayer.py mainnet testnet
 ```
  
-A key in `.env` or `.env.testnet` overrides the shared one. The wallet holds real USDC on mainnet.
+A key in `.env` or `.env.testnet` overrides the shared one.
  
 ## Limits
  
