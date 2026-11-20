@@ -1,5 +1,5 @@
 
-# Goblett relayer
+# Goblett relayer 
  
 Voters sign registrations and votes in the browser and publish them to Nostr. The relayer picks them up and submits them to the chain, paying the gas. Anyone can run their own relayer on the same topic.
  
